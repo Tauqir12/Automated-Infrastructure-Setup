@@ -1,0 +1,60 @@
+pipeline {
+    agent any
+
+    environment {
+        SSH_KEY = ('ec2-ssh-key')      // ID of SSH key added to Jenkins credentials
+        EC2_USER = 'ec2-user'
+        EC2_HOST = 'ec2.compute.amazonaws.com'
+        JAR_NAME = 'app.jar'
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                git url: 'https://github.com/xyxy/java-web-app.git', branch: 'main'
+            }
+        }
+
+        stage('Build with Maven') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh 'mvn test'
+            }
+        }
+
+        stage('Deploy to EC2') {
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                script {
+                    def jarPath = sh(script: "ls target/*.jar", returnStdout: true).trim()
+                    sh """
+                    echo "$SSH_KEY" > ec2_key.pem
+                    chmod 600 ec2_key.pem
+                    
+                    scp -i ec2_key.pem -o StrictHostKeyChecking=no ${jarPath} $EC2_USER@$EC2_HOST:/home/ec2-user/$JAR_NAME
+                    scp -i ec2_key.pem -o StrictHostKeyChecking=no deploy.sh $EC2_USER@$EC2_HOST:/home/ec2-user/
+                    ssh -i ec2_key.pem -o StrictHostKeyChecking=no $EC2_USER@$EC2_HOST "bash /home/ec2-user/deploy.sh $JAR_NAME"
+                    rm ec2_key.pem
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo 'Build failed!'
+        }
+        success {
+            echo 'Deployment complete!'
+        }
+    }
+}
+
